@@ -117,7 +117,7 @@ class InteractiveExperimenter:
         self._menu_widgets()
         widgets_params = {}
         for name, param in self.params.items():
-            w = ipywidgets.SelectionSlider(options=param, index=len(param)//2, description=f'{name}:',
+            w = ipywidgets.SelectionSlider(options=param, index=(len(param)-1)//2, description=f'{name}:',
                                         continuous_update=self.continuous_update, readout=True)
             w.observe(self._update_display, names='value')
             widgets_params[name] = w
