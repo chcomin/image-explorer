@@ -219,8 +219,18 @@ class InteractiveExperimenter:
         if overlay.max()>1:
             self.widget_warning.value = 'Warning, expected largest value of overlay image to be 1.'
 
-        b_max = background.max()
-        img_out = (1. - alpha)*b_max*overlay + alpha*background
+        #b_max = background.max()
+        #img_out = (1. - alpha)*b_max*overlay + alpha*background
+        if background.ndim==2:
+            background = np.tile(background[..., None], 3)  # Three channel grayscale
+        if overlay.ndim==2:
+            overlay_color = np.zeros((*overlay.shape, 3))
+            overlay_color[:, :, 0] = 255*overlay
+
+        mask = overlay==1
+        img_out = background.copy()
+        img_out[mask] = (1. - alpha)*overlay_color[mask] + alpha*background[mask]
+        img_out = np.round(img_out).astype(np.uint8)
                
         return img_out
     
