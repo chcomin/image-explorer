@@ -6,10 +6,12 @@ from scipy import ndimage as ndi
 import itertools
 import bisect
 import pickle
+import copy
 
 class InteractiveExperimenter:
     
-    def __init__(self, parameters, func, pre_compute=False, continuous_update=True, figsize=(9.5,8), cmap='gray'):
+    def __init__(self, parameters, func, pre_compute=False, continuous_update=True, img_selector=None,
+                 figsize=(9.5,8), cmap='gray'):
         """This class lets you explore the output image returned by function `func` for all possible 
         combinations of the parameters indicated in `parameters`. Since an interactive matplotlib plot is 
         shown in a Jupyter notebook, you need to include the magic command ``%matplotlib notebook`` somewhere
@@ -28,23 +30,35 @@ class InteractiveExperimenter:
             {'par1_name': par1_values, 'par2_name': par2_values, 'par3_name': par3_values}, where par*_values is
             a list of values.
         func : callable
-            The function that will be used for transforming an input image.
+            The function that will be used for transforming an input image. The parameters must have the same
+            name as in the `parameters` dict.
         pre_compute : bool
             Wether to pre-compute the output values. See above.
         continuous_update : bool
             If True, the plot is updated as the slider is moved. If False, the plot is only updated after 
             releasing the slider. Set to False if the computation of `func` takes too long and values haven't
             been pre-computed.
+        img_selector : callable
+            When provided, it can be used for exploring a 3D image or a collection of images. The provided
+            function is called with the same arguments as `func` and must return a 2D image. For instance, 
+            one can define it as ``lambda img, idx, **kwargs: img[idx]`` to be able to view slices of a 
+            3D image.
         figsize : tuple
             The size of the figure
         cmap : string
             The colormap to use.
         """
+
+        if img_selector is None:
+            # Create function that accepts an image and any number of args and kwargs and returns
+            # the input image
+            img_selector = lambda img, *_, **__: img
         
         self.params = parameters
         self.func = func
         self.pre_compute = pre_compute
         self.continuous_update = continuous_update
+        self.img_selector = img_selector
         self.figsize = figsize
         self.cmap = cmap
         
@@ -58,6 +72,7 @@ class InteractiveExperimenter:
         self._create_widgets()
         
     def _show(self):
+        """Show the plot and all widgets"""
         
         widget_out = self.widget_out
         display(widget_out)
@@ -96,28 +111,31 @@ class InteractiveExperimenter:
         
         Parameters
         ----------
-        img : ndarray
-            A numpy array representing the image to be processed.
+        img : ndarray or list
+            A numpy array representing the image to be processed. Can also be a 3D image or a list of images
+            if an image selector was provided when instantiating the class.
         """
         
-        img = img.copy()
+        img = copy.deepcopy(img)
+        self.img = img
+        self.func_kwargs = kwargs
         self.widget_out.clear_output(wait=True)
         if self.pre_compute:
             self._pre_compute_outpus(img, **kwargs)
         
-        self._update_output(img, **kwargs)
-        self.img = img
-        self.func_kwargs = kwargs
+        self._update_output(img)
         self._show()
                 
     def _create_widgets(self):
+        """Create menu and parameter widgets"""
         
         self.widget_out = ipywidgets.Output(layout={'border': '1px solid black'})
         
         self._menu_widgets()
         widgets_params = {}
         for name, param in self.params.items():
-            w = ipywidgets.SelectionSlider(options=param, index=(len(param)-1)//2, description=f'{name}:',
+            init_val = param[(len(param)-1)//2]
+            w = ipywidgets.SelectionSlider(options=param, value=init_val, description=f'{name}:',
                                         continuous_update=self.continuous_update, readout=True)
             w.observe(self._update_display, names='value')
             widgets_params[name] = w
@@ -125,6 +143,7 @@ class InteractiveExperimenter:
         self.widgets_params = widgets_params
         
     def _menu_widgets(self):
+        """Create menu widgets"""
         
         # Alpha blending
         widget_alpha = ipywidgets.FloatSlider(value=0., min=0, max=1.0, step=1, description='Alpha:',
@@ -155,20 +174,34 @@ class InteractiveExperimenter:
         self.widget_overlay = widget_overlay
         self.widget_warning = widget_warning
         
-    def _update_output(self, img, **kwargs):
+    def _get_func_parameters(self):
+        """Get parameters values that will be used for the next call of the image processing function (self.func). The values
+        are obtained from the current widgets states. Also sets the additional fixed parameters of the function."""
 
-        func_kwargs = kwargs
+        all_func_kwargs = dict(self.func_kwargs)
         for name in self.params:
             widget = self.widgets_params[name]
-            func_kwargs[name] = widget.value
+            all_func_kwargs[name] = widget.value  
+
+        return all_func_kwargs     
+
+    def _update_output(self, img):
+        """Apply the image processing function (self.func) to the input image"""
+
+        func_kwargs = self._get_func_parameters()
             
         if self.pre_compute:
             img_output = self.all_img_output(**func_kwargs)
         else:
             img_output = self.func(img, **func_kwargs)
-        self.img_output = img_output
+        self.img_output = np.array(img_output)
         
     def _update_display(self, change):
+        """This function is called when a widget changes. It is the main function used for updating the
+        plot given the current widget states and function parameters.
+        
+        TODO: Modularize this function for improving maintenance. 
+        """
         
         self.widget_warning.value = ''
         
@@ -179,18 +212,20 @@ class InteractiveExperimenter:
             param_change = False
             
         if param_change:
-            self._update_output(self.img, **self.func_kwargs)
+            self._update_output(self.img)
         img_output = self.img_output
+
+        img = self.img_selector(self.img, **self._get_func_parameters())
     
         if self.widget_overlay.value:
             self._change_widget_att(self.widget_alpha, 0.1, self._update_display, 'step')
             self._change_widget_att(self.widget_fix_int, True, self._update_display, 'disabled')
-            img_output = self.blend(self.img, img_output, self.widget_alpha.value)                                
+            img_output = self.blend(img, img_output, self.widget_alpha.value)                                
         else:
             self._change_widget_att(self.widget_alpha, 1, self._update_display, 'step')
             self._change_widget_att(self.widget_fix_int, False, self._update_display, 'disabled')
             if self.widget_alpha.value==1:
-                img_output = self.img
+                img_output = img
             
         plot.set_data(img_output)
         
@@ -215,6 +250,7 @@ class InteractiveExperimenter:
         widget.observe(cb, names=name)
         
     def blend(self, background, overlay, alpha):
+        """Blend two images"""
         
         if overlay.max()>1:
             self.widget_warning.value = 'Warning, expected largest value of overlay image to be 1.'
@@ -235,7 +271,9 @@ class InteractiveExperimenter:
         return img_out
     
     def _pre_compute_outpus(self, img, **kwargs):
-        
+        """Call the image processing function (self.func) for all parameters combinations and save the
+        results"""
+
         rc = ResultCompStor(self.params, self.func, **kwargs)
         print('Precomputing values...')
         rc.run(img)
@@ -329,6 +367,7 @@ class ResultCompStor:
         print('Done!')
 
     def _prepare_parameters(self):
+        """Create list of parameters combinations"""
 
         parameters = self.params
         if isinstance(parameters, (list, tuple)):
@@ -381,6 +420,7 @@ class ResultCompStor:
         return rc
             
     def _closest(self, l, v):
+        """Find the value in list `l` that is most similar to `v` using binary search"""
 
         ind = bisect.bisect_left(l, v)
         if ind>=len(l) or l[ind]!=v:
@@ -388,8 +428,3 @@ class ResultCompStor:
             raise ValueError('Bisect did not find the requested element')
         else:
             return ind
-
-            
-
-       
-    
