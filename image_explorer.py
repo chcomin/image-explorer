@@ -2,7 +2,6 @@ import ipywidgets
 from IPython.display import display
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy import ndimage as ndi
 import itertools
 import bisect
 import pickle
